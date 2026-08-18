@@ -3,3 +3,7 @@ ip6829_raw_*.txt
 
 __pycache__/
 *.pyc
+
+# local environment and launcher
+.venv/
+*.bat
