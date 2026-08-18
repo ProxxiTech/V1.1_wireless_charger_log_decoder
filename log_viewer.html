@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>IP6829 Log Viewer</title>
+<script src="https://cdn.plot.ly/plotly-2.35.2.min.js" charset="utf-8"></script>
+<style>
+  body { font-family: "Segoe UI", sans-serif; margin: 0; background: #fafafa; color: #222; }
+  header { padding: 10px 16px; background: #1f2937; color: #fff; display: flex;
+           align-items: baseline; gap: 16px; flex-wrap: wrap; }
+  header h1 { font-size: 16px; margin: 0; }
+  header .hint { font-size: 12px; color: #9ca3af; }
+  #drop { margin: 14px 16px; padding: 26px; border: 2px dashed #94a3b8; border-radius: 8px;
+          text-align: center; color: #475569; background: #fff; cursor: pointer; }
+  #drop.hover { border-color: #2563eb; background: #eff6ff; }
+  #stats { margin: 0 16px 6px; font-size: 13px; color: #334155; white-space: pre-wrap; }
+  #plots { margin: 0 8px 20px; }
+  #err { color: #b91c1c; margin: 8px 16px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>IP6829 Log Viewer</h1>
+  <span class="hint">drag-zoom any plot &mdash; all x-axes follow &bull; double-click to reset &bull;
+  shift-drag to pan &bull; click legend entries to hide traces</span>
+</header>
+
+<div id="drop">Drop an IP6829 log file here (or click to choose)
+  <input id="file" type="file" accept=".txt,.log" style="display:none">
+</div>
+<div id="err"></div>
+<div id="stats"></div>
+<div id="rowsel" style="margin:0 16px 6px; font-size:13px;"></div>
+<div id="plots"></div>
+
+<script>
+"use strict";
+
+/* ---- NTC -> temperature (same model as ip6829_live_decoder.py) ---------- */
+const NTC_R25 = 100000, NTC_BETA = 3950, NTC_PULLUP = 100000, NTC_VREF_MV = 3300;
+function ntcToC(mv) {
+  if (!(mv > 0) || mv >= NTC_VREF_MV) return null;
+  const r = NTC_PULLUP * mv / (NTC_VREF_MV - mv);
+  return 1 / (1 / 298.15 + Math.log(r / NTC_R25) / NTC_BETA) - 273.15;
+}
+
+const STOP_CODES = { 27: "over temperature (NTC)", 23: "RX requested stop (EPT)",
+                     4: "ping: no handshake", 5: "ping: no receiver" };
+const EPT_REASONS = { 0: "Unknown", 1: "Charge complete", 2: "Internal fault",
+                      3: "Over temperature", 4: "Over voltage", 5: "Over current",
+                      6: "Battery failure", 8: "No response", 11: "Restart" };
+
+/* ---- parser -------------------------------------------------------------- */
+function parseLog(text) {
+  const S = { temp: [], i1: [], i2: [], vbus: [], freq: [], ploss: [],
+              ptx: [], prx: [], ce: [] };
+  const events = [];       // {x, label, color}
+  let sawVI = false, stops = 0, restarts = 0;
+  let ntcMin = Infinity, ntcMax = -Infinity, rxInfo = "";
+  const lines = text.split(/\r?\n/);
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim(), n = i + 1;
+    try {
+      if (line.startsWith("VI:")) {
+        const p = line.slice(3).split(",").map(Number);
+        S.vbus.push([n, p[0]]); S.i1.push([n, p[1]]); S.i2.push([n, p[2]]);
+        sawVI = true;
+      } else if (line.startsWith("F:")) {
+        S.freq.push([n, Number(line.slice(2).split(",")[0])]);
+      } else if (line.startsWith("NTC:")) {
+        const mv = Number(line.slice(4).split(",")[0]);
+        ntcMin = Math.min(ntcMin, mv); ntcMax = Math.max(ntcMax, mv);
+        const t = ntcToC(mv);
+        if (t !== null) S.temp.push([n, t]);
+      } else if (line.startsWith("Ploss:")) {
+        const p = line.slice(6).split(",").map(Number);
+        S.ploss.push([n, p[0]]); S.ptx.push([n, p[1]]);
+      } else if (line.startsWith("Pt:")) {
+        S.prx.push([n, Number(line.slice(3))]);
+      } else if (line.startsWith("ST:")) {
+        const c = Number(line.slice(3));
+        if (sawVI) {          // only mark stops that end a power-transfer phase
+          stops++; sawVI = false;
+          events.push({ x: n, label: "STOP ST:" + c +
+                        (STOP_CODES[c] ? " - " + STOP_CODES[c] : ""), color: "#dc2626" });
+        }
+      } else if (line.startsWith("$H")) {
+        const f = line.slice(2).split(",");
+        const h = parseInt(f[0], 16);
+        if (h === 0x03) {
+          let v = parseInt(f[1], 16); if (v > 127) v -= 256;
+          S.ce.push([n, v]);
+        } else if (h === 0x01) {
+          restarts++;
+          events.push({ x: n, label: "ping answered (restart #" + restarts + ")",
+                        color: "#16a34a" });
+        } else if (h === 0x02) {
+          const r = parseInt(f[1], 16);
+          events.push({ x: n, label: "EPT from RX: " + (EPT_REASONS[r] || r),
+                        color: "#ea580c" });
+        } else if (h === 0x71 && f.length >= 4) {
+          const ver = parseInt(f[1], 16);
+          rxInfo = "RX: Qi v" + (ver >> 4) + "." + (ver & 15) +
+                   ", manufacturer 0x" + ((parseInt(f[2], 16) << 8) | parseInt(f[3], 16))
+                   .toString(16).padStart(4, "0").toUpperCase();
+        }
+      }
+    } catch (e) { /* skip malformed line */ }
+  }
+  return { S, events, stops, restarts, ntcMin, ntcMax, rxInfo, nLines: lines.length };
+}
+
+/* ---- plotting ------------------------------------------------------------ */
+const ROWS = [
+  { title: "Temperature (°C, est. from NTC)",
+    traces: [{ key: "temp", name: "Temp", color: "#cc4400" }] },
+  { title: "FOD power loss (mW)",
+    traces: [{ key: "ploss", name: "Ploss", color: "#b30000" }] },
+  { title: "Currents (mA)",
+    traces: [{ key: "i1", name: "I1", color: "#0066cc" },
+             { key: "i2", name: "I2", color: "#00879e" }] },
+  { title: "Vbus (mV)",
+    traces: [{ key: "vbus", name: "Vbus", color: "#1a7a1a" }] },
+  { title: "Inverter frequency (raw)",
+    traces: [{ key: "freq", name: "Freq", color: "#7a1a7a" }] },
+  { title: "Power (mW)",
+    traces: [{ key: "ptx", name: "Ptx", color: "#946200" },
+             { key: "prx", name: "Prx", color: "#4d6600" }] },
+  { title: "Control Error from RX",
+    traces: [{ key: "ce", name: "CE", color: "#555555" }] },
+];
+const MAX_EVENT_LINES = 400;
+
+/* per-row show/hide checkboxes */
+let lastResult = null, lastName = "";
+const rowEnabled = {};
+ROWS.forEach(r => rowEnabled[r.title] = true);
+(function buildRowSel() {
+  const box = document.getElementById("rowsel");
+  box.appendChild(document.createTextNode("Show: "));
+  ROWS.forEach(r => {
+    const lb = document.createElement("label");
+    lb.style.marginRight = "12px";
+    const cb = document.createElement("input");
+    cb.type = "checkbox"; cb.checked = true;
+    cb.addEventListener("change", () => {
+      rowEnabled[r.title] = cb.checked;
+      if (lastResult) render(lastResult, lastName);
+    });
+    lb.appendChild(cb);
+    lb.appendChild(document.createTextNode(" " + r.traces.map(t => t.name).join("/")));
+    box.appendChild(lb);
+  });
+})();
+
+function render(result, fileName) {
+  lastResult = result; lastName = fileName;
+  const { S, events, stops, restarts, ntcMin, ntcMax, rxInfo, nLines } = result;
+  const tLo = ntcToC(ntcMax), tHi = ntcToC(ntcMin);
+  document.getElementById("stats").textContent =
+    fileName + ": " + nLines.toLocaleString() + " lines | " +
+    stops + " stops, " + restarts + " restarts | " +
+    (isFinite(ntcMin) ? "NTC " + ntcMin + ".." + ntcMax + " mV (~" +
+      tLo.toFixed(1) + ".." + tHi.toFixed(1) + " °C)" : "no NTC data") +
+    (rxInfo ? " | " + rxInfo : "");
+
+  const rows = ROWS.filter(r => rowEnabled[r.title] &&
+                                r.traces.some(t => S[t.key].length > 1));
+  if (!rows.length) { document.getElementById("plots").innerHTML =
+    "<p style='margin:16px'>No rows selected (or no plottable data).</p>"; return; }
+  const data = [], layout = { height: rows.length * 150 + 120, showlegend: true,
+    legend: { orientation: "h", y: 1.005, yanchor: "bottom" },
+    margin: { l: 60, r: 20, t: 40, b: 40 }, hovermode: "x unified",
+    paper_bgcolor: "#fafafa", plot_bgcolor: "#ffffff",
+    xaxis: { title: "log line number",
+             anchor: rows.length === 1 ? "y" : "y" + rows.length },
+    annotations: [], shapes: [] };
+
+  const gap = 0.015, rowH = (1 - gap * (rows.length - 1)) / rows.length;
+  rows.forEach((row, ri) => {
+    const ax = ri === 0 ? "y" : "y" + (ri + 1);
+    const top = 1 - ri * (rowH + gap);
+    layout[ri === 0 ? "yaxis" : "yaxis" + (ri + 1)] =
+      { domain: [top - rowH, top], zeroline: false };
+    layout.annotations.push({ text: row.title, xref: "paper", yref: "paper",
+      x: 0, y: top, xanchor: "left", yanchor: "bottom", showarrow: false,
+      font: { size: 12, color: "#475569" } });
+    row.traces.forEach(t => {
+      const pts = S[t.key];
+      data.push({ x: pts.map(p => p[0]), y: pts.map(p => p[1]),
+        name: t.name, yaxis: ax, xaxis: "x", type: "scattergl", mode: "lines",
+        line: { color: t.color, width: 1.2 } });
+    });
+  });
+
+  // vertical event markers spanning all rows (capped for performance)
+  const evs = events.length > MAX_EVENT_LINES
+    ? events.filter(e => !e.label.startsWith("ping")) : events;
+  evs.slice(0, MAX_EVENT_LINES).forEach(e => {
+    layout.shapes.push({ type: "line", xref: "x", yref: "paper",
+      x0: e.x, x1: e.x, y0: 0, y1: 1,
+      line: { color: e.color, width: 1, dash: "dot" }, opacity: 0.6 });
+  });
+  // hoverable markers for events on their own invisible strip above the rows
+  if (evs.length) {
+    layout.yaxis90 = { domain: [0.99, 1], visible: false, range: [0, 2],
+                       fixedrange: true, overlaying: false };
+    data.push({ x: evs.map(e => e.x), y: evs.map(() => 1), yaxis: "y90",
+      xaxis: "x", type: "scattergl", mode: "markers", name: "events",
+      marker: { color: evs.map(e => e.color), size: 8, symbol: "triangle-down" },
+      text: evs.map(e => e.label), hoverinfo: "text", showlegend: true });
+  }
+
+  Plotly.newPlot("plots", data, layout, { responsive: true,
+    scrollZoom: true, displaylogo: false });
+}
+
+/* ---- file handling -------------------------------------------------------- */
+const drop = document.getElementById("drop"), fileInput = document.getElementById("file");
+function loadFile(f) {
+  const rd = new FileReader();
+  rd.onload = () => {
+    try { render(parseLog(rd.result), f.name); document.getElementById("err").textContent = ""; }
+    catch (e) { document.getElementById("err").textContent = "Failed to parse: " + e; }
+  };
+  rd.readAsText(f);
+}
+drop.addEventListener("click", () => fileInput.click());
+fileInput.addEventListener("change", () => fileInput.files[0] && loadFile(fileInput.files[0]));
+["dragover", "dragenter"].forEach(ev => drop.addEventListener(ev, e => {
+  e.preventDefault(); drop.classList.add("hover"); }));
+["dragleave", "drop"].forEach(ev => drop.addEventListener(ev, e => {
+  e.preventDefault(); drop.classList.remove("hover"); }));
+drop.addEventListener("drop", e => {
+  if (e.dataTransfer.files.length) loadFile(e.dataTransfer.files[0]); });
+window.addEventListener("load", () => {
+  if (typeof Plotly === "undefined")
+    document.getElementById("err").textContent =
+      "Plotly failed to load from CDN - this viewer needs internet access once " +
+      "(or save plotly.min.js next to this file and change the script src).";
+});
+</script>
+</body>
+</html>
