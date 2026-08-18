@@ -1,0 +1,5 @@
+# raw serial captures written by the decoder at runtime
+ip6829_raw_*.txt
+
+__pycache__/
+*.pyc
