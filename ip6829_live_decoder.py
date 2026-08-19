@@ -30,10 +30,15 @@ Usage:
 
 import argparse
 import math
+import re
 import sys
 import time
 import threading
 from collections import deque
+
+# raw captures are written as "YYYY-MM-DD HH:MM:SS.mmm <line>"; the parser
+# strips the stamp so both stamped and legacy unstamped logs replay fine
+TS_PREFIX_RE = re.compile(r"^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:\.\d+)?\s+")
 
 # ---------------------------------------------------------------- protocol --
 
@@ -148,7 +153,7 @@ class LogParser:
 
     def feed(self, line):
         """Parse one line; returns True if the line was recognized."""
-        line = line.strip()
+        line = TS_PREFIX_RE.sub("", line.strip())
         if not line:
             return False
         try:
@@ -497,7 +502,10 @@ def run_gui(args):
             except Exception:
                 break
             if line:
-                raw_log.write(line if line.endswith("\n") else line + "\n")
+                now = time.time()
+                stamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(now))
+                stamp += ".%03d " % (int(now * 1000) % 1000)
+                raw_log.write(stamp + (line if line.endswith("\n") else line + "\n"))
                 with queue_lock:
                     line_queue.append(line)
         raw_log.close()
