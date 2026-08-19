@@ -21,7 +21,7 @@
 <body>
 <header>
   <h1>IP6829 Log Viewer</h1>
-  <span class="hint">drag-zoom any plot &mdash; all x-axes follow &bull; double-click to reset &bull;
+  <span class="hint">drag-zoom any plot &mdash; x only, all plots follow &bull; double-click to reset &bull;
   shift-drag to pan &bull; click legend entries to hide traces</span>
 </header>
 
@@ -186,7 +186,7 @@ function render(result, fileName) {
     const ax = ri === 0 ? "y" : "y" + (ri + 1);
     const top = 1 - ri * (rowH + gap);
     layout[ri === 0 ? "yaxis" : "yaxis" + (ri + 1)] =
-      { domain: [top - rowH, top], zeroline: false };
+      { domain: [top - rowH, top], zeroline: false, fixedrange: true };
     layout.annotations.push({ text: row.title, xref: "paper", yref: "paper",
       x: 0, y: top, xanchor: "left", yanchor: "bottom", showarrow: false,
       font: { size: 12, color: "#475569" } });
