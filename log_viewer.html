@@ -28,6 +28,11 @@
 <div id="drop">Drop an IP6829 log file here (or click to choose)
   <input id="file" type="file" accept=".txt,.log" style="display:none">
 </div>
+<div id="filebar" style="margin:0 16px 6px; font-size:13px; display:none;">
+  <button id="refreshBtn">&#10227; Refresh</button>
+  <label style="margin-left:10px"><input type="checkbox" id="autoRe"> auto-refresh every 2 s</label>
+  <span id="filemode" style="margin-left:10px; color:#64748b;"></span>
+</div>
 <div id="err"></div>
 <div id="stats"></div>
 <div id="rowsel" style="margin:0 16px 6px; font-size:13px;"></div>
@@ -216,28 +221,87 @@ function render(result, fileName) {
       text: evs.map(e => e.label), hoverinfo: "text", showlegend: true });
   }
 
+  // keep the user's x-zoom across refreshes of the same kind of file
+  const gd = document.getElementById("plots");
+  if (gd.layout && gd.layout.xaxis && gd.layout.xaxis.autorange === false &&
+      gd.layout.xaxis.range && gd.layout.xaxis.type === layout.xaxis.type) {
+    layout.xaxis.range = gd.layout.xaxis.range.slice();
+    layout.xaxis.autorange = false;
+  }
+
   Plotly.newPlot("plots", data, layout, { responsive: true,
     scrollZoom: true, displaylogo: false });
 }
 
 /* ---- file handling -------------------------------------------------------- */
 const drop = document.getElementById("drop"), fileInput = document.getElementById("file");
+const errBox = document.getElementById("err");
+let fileHandle = null;   // File System Access handle -> true re-reads from disk
+let plainFile = null;    // fallback File object (may go stale if file changes)
+
+function showFileBar() {
+  document.getElementById("filebar").style.display = "block";
+  document.getElementById("filemode").textContent = fileHandle
+    ? "re-readable from disk"
+    : "snapshot only - if the file changes on disk, re-open it to refresh";
+}
+
 function loadFile(f) {
   const rd = new FileReader();
   rd.onload = () => {
-    try { render(parseLog(rd.result), f.name); document.getElementById("err").textContent = ""; }
-    catch (e) { document.getElementById("err").textContent = "Failed to parse: " + e; }
+    try { render(parseLog(rd.result), f.name); errBox.textContent = ""; showFileBar(); }
+    catch (e) { errBox.textContent = "Failed to parse: " + e; }
   };
+  rd.onerror = () => { errBox.textContent =
+    "Could not read the file (it changed on disk?) - please re-open it."; };
   rd.readAsText(f);
 }
-drop.addEventListener("click", () => fileInput.click());
-fileInput.addEventListener("change", () => fileInput.files[0] && loadFile(fileInput.files[0]));
+
+async function refresh() {
+  try {
+    if (fileHandle) { loadFile(await fileHandle.getFile()); return; }
+  } catch (e) { errBox.textContent = "Refresh failed: " + e; return; }
+  if (plainFile) loadFile(plainFile);
+}
+
+async function openPicker() {
+  if (window.showOpenFilePicker) {
+    try {
+      const [h] = await window.showOpenFilePicker({ types: [{
+        description: "IP6829 logs", accept: { "text/plain": [".txt", ".log"] } }] });
+      fileHandle = h; plainFile = null; refresh(); return;
+    } catch (e) { if (e && e.name === "AbortError") return; /* else fall through */ }
+  }
+  fileInput.click();
+}
+
+drop.addEventListener("click", openPicker);
+fileInput.addEventListener("change", () => {
+  if (fileInput.files[0]) { plainFile = fileInput.files[0]; fileHandle = null;
+                            loadFile(plainFile); }
+});
 ["dragover", "dragenter"].forEach(ev => drop.addEventListener(ev, e => {
   e.preventDefault(); drop.classList.add("hover"); }));
 ["dragleave", "drop"].forEach(ev => drop.addEventListener(ev, e => {
   e.preventDefault(); drop.classList.remove("hover"); }));
-drop.addEventListener("drop", e => {
-  if (e.dataTransfer.files.length) loadFile(e.dataTransfer.files[0]); });
+drop.addEventListener("drop", async e => {
+  const item = e.dataTransfer.items && e.dataTransfer.items[0];
+  if (item && item.getAsFileSystemHandle) {
+    try {
+      const h = await item.getAsFileSystemHandle();
+      if (h && h.kind === "file") { fileHandle = h; plainFile = null; refresh(); return; }
+    } catch (err) { /* fall through to snapshot mode */ }
+  }
+  if (e.dataTransfer.files.length) { plainFile = e.dataTransfer.files[0];
+    fileHandle = null; loadFile(plainFile); }
+});
+
+document.getElementById("refreshBtn").addEventListener("click", refresh);
+let autoTimer = null;
+document.getElementById("autoRe").addEventListener("change", ev => {
+  if (ev.target.checked) autoTimer = setInterval(refresh, 2000);
+  else { clearInterval(autoTimer); autoTimer = null; }
+});
 window.addEventListener("load", () => {
   if (typeof Plotly === "undefined")
     document.getElementById("err").textContent =
