@@ -30,6 +30,7 @@ Usage:
 
 import argparse
 import math
+import os
 import re
 import sys
 import time
@@ -514,16 +515,25 @@ def run_gui(args):
         except Exception:
             pass
 
-    def replay_reader(path, speed):
+    def replay_reader(path, speed, tail_mb):
         # ~4 VI frames/s on the wire; 3 log lines per frame -> ~12 lines/s
         delay = 1.0 / (12.0 * speed)
         with open(path, errors="ignore") as f:
+            if tail_mb > 0:
+                skip = os.path.getsize(path) - int(tail_mb * 1048576)
+                if skip > 0:
+                    f.seek(skip)
+                    f.readline()      # drop the partial line at the cut
+            batch = 0
             for line in f:
                 if reader["stop"].is_set():
                     return
                 with queue_lock:
                     line_queue.append(line)
-                time.sleep(delay)
+                batch += 1
+                if batch >= 20:       # sleep per chunk: Windows timers are coarse
+                    time.sleep(delay * 20)
+                    batch = 0
 
     def start_reader(target, *a):
         reader["stop"].clear()
@@ -558,7 +568,7 @@ def run_gui(args):
 
     def tick():
         n = 0
-        while n < 400:  # bound work per tick
+        while n < 2000:  # bound work per tick
             with queue_lock:
                 if not line_queue:
                     break
@@ -627,9 +637,13 @@ def run_gui(args):
 
     refresh_ports()
     if args.replay:
-        src_label.config(text="replay: %s (x%g)" % (args.replay, args.speed),
+        tail_note = (" last %g MB" % args.tail_mb) if (
+            args.tail_mb > 0 and
+            os.path.getsize(args.replay) > args.tail_mb * 1048576) else ""
+        src_label.config(text="replay: %s (x%g)%s" % (args.replay, args.speed,
+                                                      tail_note),
                          foreground="#0055cc")
-        start_reader(replay_reader, args.replay, args.speed)
+        start_reader(replay_reader, args.replay, args.speed, args.tail_mb)
     elif args.port:
         port_cb.set(args.port)
         start_reader(serial_reader, args.port)
@@ -649,6 +663,9 @@ def main():
     ap.add_argument("--replay", metavar="FILE", help="replay a saved log file")
     ap.add_argument("--speed", type=float, default=20.0,
                     help="replay speed multiplier (default 20x)")
+    ap.add_argument("--tail-mb", type=float, default=5.0,
+                    help="replay only the last N MB of a large file "
+                         "(default 5; 0 = whole file)")
     ap.add_argument("--summary", metavar="FILE",
                     help="offline: parse FILE and print an analysis, no GUI")
     args = ap.parse_args()

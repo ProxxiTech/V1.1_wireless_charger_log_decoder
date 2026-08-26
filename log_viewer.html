@@ -28,6 +28,14 @@
 <div id="drop">Drop an IP6829 log file here (or click to choose)
   <input id="file" type="file" accept=".txt,.log" style="display:none">
 </div>
+<div style="margin:0 16px 6px; font-size:13px;">
+  Load: <select id="tailSel">
+    <option value="1">last 1 MB</option>
+    <option value="5" selected>last 5 MB (~2-3 h of capture)</option>
+    <option value="20">last 20 MB</option>
+    <option value="0">entire file (may be slow on huge logs)</option>
+  </select>
+</div>
 <div id="filebar" style="margin:0 16px 6px; font-size:13px; display:none;">
   <button id="refreshBtn">&#10227; Refresh</button>
   <label style="margin-left:10px"><input type="checkbox" id="autoRe"> auto-refresh every 2 s</label>
@@ -167,7 +175,7 @@ function render(result, fileName) {
   const { S, events, stops, restarts, ntcMin, ntcMax, rxInfo, nLines, hasTs } = result;
   const tLo = ntcToC(ntcMax), tHi = ntcToC(ntcMin);
   document.getElementById("stats").textContent =
-    fileName + ": " + nLines.toLocaleString() + " lines | " +
+    fileName + ": " + lastNote + nLines.toLocaleString() + " lines | " +
     stops + " stops, " + restarts + " restarts | " +
     (isFinite(ntcMin) ? "NTC " + ntcMin + ".." + ntcMax + " mV (~" +
       tLo.toFixed(1) + ".." + tHi.toFixed(1) + " °C)" : "no NTC data") +
@@ -246,16 +254,29 @@ function showFileBar() {
     : "snapshot only - if the file changes on disk, re-open it to refresh";
 }
 
+let lastNote = "";
 function loadFile(f) {
+  const mb = Number(document.getElementById("tailSel").value);
+  let blob = f, note = "";
+  if (mb > 0 && f.size > mb * 1048576) {
+    blob = f.slice(f.size - mb * 1048576);   // read only the tail, cheaply
+    note = "showing last " + mb + " MB of " + (f.size / 1048576).toFixed(1) + " MB | ";
+  }
   const rd = new FileReader();
   rd.onload = () => {
-    try { render(parseLog(rd.result), f.name); errBox.textContent = ""; showFileBar(); }
+    try {
+      let text = rd.result;
+      if (blob !== f) text = text.slice(text.indexOf("\n") + 1);  // drop partial line
+      lastNote = note;
+      render(parseLog(text), f.name); errBox.textContent = ""; showFileBar();
+    }
     catch (e) { errBox.textContent = "Failed to parse: " + e; }
   };
   rd.onerror = () => { errBox.textContent =
     "Could not read the file (it changed on disk?) - please re-open it."; };
-  rd.readAsText(f);
+  rd.readAsText(blob);
 }
+document.getElementById("tailSel").addEventListener("change", refresh);
 
 async function refresh() {
   try {
