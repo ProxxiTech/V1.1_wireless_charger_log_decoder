@@ -57,6 +57,11 @@ function ntcToC(mv) {
   return 1 / (1 / 298.15 + Math.log(r / NTC_R25) / NTC_BETA) - 273.15;
 }
 
+/* F: raw value -> estimated kHz (assumed 48 MHz timer clock; calibrate
+   FREQ_CLK_HZ with one scope measurement - keep in sync with the .py) */
+const FREQ_CLK_HZ = 48e6;
+function freqRawToKhz(raw) { return raw > 0 ? FREQ_CLK_HZ / raw / 1000 : null; }
+
 const STOP_CODES = { 27: "over temperature (NTC)", 23: "RX requested stop (EPT)",
                      4: "ping: no handshake", 5: "ping: no receiver" };
 const EPT_REASONS = { 0: "Unknown", 1: "Charge complete", 2: "Internal fault",
@@ -82,7 +87,8 @@ function parseLog(text) {
         S.vbus.push([n, p[0]]); S.i1.push([n, p[1]]); S.i2.push([n, p[2]]);
         sawVI = true;
       } else if (line.startsWith("F:")) {
-        S.freq.push([n, Number(line.slice(2).split(",")[0])]);
+        const k = freqRawToKhz(Number(line.slice(2).split(",")[0]));
+        if (k !== null) S.freq.push([n, k]);
       } else if (line.startsWith("NTC:")) {
         const mv = Number(line.slice(4).split(",")[0]);
         ntcMin = Math.min(ntcMin, mv); ntcMax = Math.max(ntcMax, mv);
@@ -138,7 +144,7 @@ const ROWS = [
              { key: "i2", name: "I2", color: "#00879e" }] },
   { title: "Vbus (mV)",
     traces: [{ key: "vbus", name: "Vbus", color: "#1a7a1a" }] },
-  { title: "Inverter frequency (raw)",
+  { title: "Inverter frequency (kHz, estimated from 48 MHz clock)",
     traces: [{ key: "freq", name: "Freq", color: "#7a1a7a" }] },
   { title: "Power (mW)",
     traces: [{ key: "ptx", name: "Ptx", color: "#946200" },

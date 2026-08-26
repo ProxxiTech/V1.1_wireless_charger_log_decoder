@@ -83,6 +83,22 @@ NTC_PULLUP = 100_000.0  # internal pull-up, ohms (assumed)
 NTC_VREF_MV = 3300.0    # pull-up rail, mV (assumed = VCC)
 
 
+# --- F: raw value -> inverter frequency ------------------------------------
+# The F: value behaves like a timer period: it RISES as the chip pushes more
+# power, i.e. as the operating frequency descends toward the 100 kHz
+# resonance. Assuming a 48 MHz timer clock puts every observed value inside
+# the IP6829's specified 115-148 kHz band (ping F=328 -> 146 kHz, the design
+# guide's typical f_op). ESTIMATE - calibrate FREQ_CLK_HZ with one scope
+# measurement of the coil frequency at a known F: value.
+FREQ_CLK_HZ = 48e6
+
+
+def freq_raw_to_khz(raw):
+    if not raw:
+        return None
+    return FREQ_CLK_HZ / raw / 1000.0
+
+
 def ntc_mv_to_c(mv):
     """Convert an NTC: reading in mV to degrees Celsius (beta model)."""
     if mv is None or mv <= 0 or mv >= NTC_VREF_MV:
@@ -360,7 +376,8 @@ def run_gui(args):
     fields = {}
     layout = [
         ("Vbus (mV)", "vbus"), ("I1 (mA)", "i1"), ("I2 (mA)", "i2"),
-        ("Freq raw", "freq"), ("Duty raw", "duty"), ("CE (RX ctrl err)", "ce"),
+        ("Freq raw", "freq"), ("Freq kHz (est.)", "fkhz"),
+        ("CE (RX ctrl err)", "ce"),
         ("NTC (mV)", "ntc"), ("Temp (C)*", "temp"), ("NTC status", "ntcstat"),
         ("Stops / Restarts", "cnt"),
         ("Ptx (mW)", "ptx"), ("Prx (mW)", "prx"), ("Ploss FOD (mW)", "ploss"),
@@ -384,7 +401,7 @@ def run_gui(args):
                    ("Current I1 (mA)", "i1", "#0066cc"),
                    ("Vbus (mV)", "vbus", "#1a7a1a"),
                    ("FOD power loss Ploss (mW)", "ploss", "#b30000"),
-                   ("Inverter frequency (raw)", "freq", "#7a1a7a"),
+                   ("Inverter frequency (kHz, estimated)", "freq", "#7a1a7a"),
                    ("Current I2 (mA)", "i2", "#00879e"),
                    ("Ptx transmitted power (mW)", "ptx", "#946200"),
                    ("Prx received power (mW)", "prx", "#4d6600"),
@@ -592,7 +609,8 @@ def run_gui(args):
         put("i1", parser.i1)
         put("i2", parser.i2)
         put("freq", parser.freq)
-        put("duty", parser.duty)
+        fk = freq_raw_to_khz(parser.freq)
+        put("fkhz", "%.1f" % fk if fk is not None else None)
         put("ce", "%+d" % parser.ce if parser.ce is not None else None)
         stat, scolor = parser.ntc_status()
         tcolor = {"red": "red", "orange": "#b36b00"}.get(scolor, "black")
@@ -617,8 +635,8 @@ def run_gui(args):
             hist["i1"].append((now, parser.i1))
             hist["i2"].append((now, parser.i2))
             hist["vbus"].append((now, parser.vbus))
-            if parser.freq is not None:
-                hist["freq"].append((now, parser.freq))
+            if parser.freq:
+                hist["freq"].append((now, freq_raw_to_khz(parser.freq)))
             if parser.ce is not None:
                 hist["ce"].append((now, parser.ce))
         if parser.ploss is not None and now - parser.last_ploss_time < 10:
