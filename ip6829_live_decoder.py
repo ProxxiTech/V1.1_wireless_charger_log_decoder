@@ -84,12 +84,10 @@ NTC_VREF_MV = 3300.0    # pull-up rail, mV (assumed = VCC)
 
 
 # --- F: raw value -> inverter frequency ------------------------------------
-# The F: value behaves like a timer period: it RISES as the chip pushes more
-# power, i.e. as the operating frequency descends toward the 100 kHz
-# resonance. Assuming a 48 MHz timer clock puts every observed value inside
-# the IP6829's specified 115-148 kHz band (ping F=328 -> 146 kHz, the design
-# guide's typical f_op). ESTIMATE - calibrate FREQ_CLK_HZ with one scope
-# measurement of the coil frequency at a known F: value.
+# The F: value is a timer period on a 48 MHz clock. Verified 2026-08-26
+# against a P9027 receiver's frequency report: app 163.8 kHz vs P9027
+# 165 kHz, app 130.8 kHz vs P9027 132 kHz (~+0.8%, within both chips'
+# counter tolerance).
 FREQ_CLK_HZ = 48e6
 
 
@@ -376,7 +374,7 @@ def run_gui(args):
     fields = {}
     layout = [
         ("Vbus (mV)", "vbus"), ("I1 (mA)", "i1"), ("I2 (mA)", "i2"),
-        ("Freq raw", "freq"), ("Freq kHz (est.)", "fkhz"),
+        ("Freq raw", "freq"), ("Freq (kHz)", "fkhz"),
         ("CE (RX ctrl err)", "ce"),
         ("NTC (mV)", "ntc"), ("Temp (C)*", "temp"), ("NTC status", "ntcstat"),
         ("Stops / Restarts", "cnt"),
@@ -401,7 +399,7 @@ def run_gui(args):
                    ("Current I1 (mA)", "i1", "#0066cc"),
                    ("Vbus (mV)", "vbus", "#1a7a1a"),
                    ("FOD power loss Ploss (mW)", "ploss", "#b30000"),
-                   ("Inverter frequency (kHz, estimated)", "freq", "#7a1a7a"),
+                   ("Inverter frequency (kHz)", "freq", "#7a1a7a"),
                    ("Current I2 (mA)", "i2", "#00879e"),
                    ("Ptx transmitted power (mW)", "ptx", "#946200"),
                    ("Prx received power (mW)", "prx", "#4d6600"),

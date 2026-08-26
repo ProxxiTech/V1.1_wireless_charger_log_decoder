@@ -57,8 +57,8 @@ function ntcToC(mv) {
   return 1 / (1 / 298.15 + Math.log(r / NTC_R25) / NTC_BETA) - 273.15;
 }
 
-/* F: raw value -> estimated kHz (assumed 48 MHz timer clock; calibrate
-   FREQ_CLK_HZ with one scope measurement - keep in sync with the .py) */
+/* F: raw value -> kHz (48 MHz timer clock, verified against a P9027
+   receiver's frequency report to within ~1%; keep in sync with the .py) */
 const FREQ_CLK_HZ = 48e6;
 function freqRawToKhz(raw) { return raw > 0 ? FREQ_CLK_HZ / raw / 1000 : null; }
 
@@ -144,7 +144,7 @@ const ROWS = [
              { key: "i2", name: "I2", color: "#00879e" }] },
   { title: "Vbus (mV)",
     traces: [{ key: "vbus", name: "Vbus", color: "#1a7a1a" }] },
-  { title: "Inverter frequency (kHz, estimated from 48 MHz clock)",
+  { title: "Inverter frequency (kHz)",
     traces: [{ key: "freq", name: "Freq", color: "#7a1a7a" }] },
   { title: "Power (mW)",
     traces: [{ key: "ptx", name: "Ptx", color: "#946200" },
